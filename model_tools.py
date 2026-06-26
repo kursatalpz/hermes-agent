@@ -1107,6 +1107,8 @@ def handle_function_call(
         except Exception:
             reset_current_observability_context = None
         try:
+            from gateway.session_context import get_session_env
+            _session_key = get_session_env("HERMES_SESSION_KEY")
             if function_name == "execute_code":
                 # Prefer the caller-provided list so subagents can't overwrite
                 # the parent's tool set via the process-global.
@@ -1117,6 +1119,7 @@ def handle_function_call(
                         task_id=task_id,
                         session_id=session_id,
                         enabled_tools=sandbox_enabled,
+                        session_key=_session_key,
                     )
             else:
                 def _dispatch(next_args: Dict[str, Any]) -> Any:
@@ -1125,6 +1128,7 @@ def handle_function_call(
                         task_id=task_id,
                         session_id=session_id,
                         user_task=user_task,
+                        session_key=_session_key,
                     )
             from hermes_cli.middleware import run_tool_execution_middleware
 
