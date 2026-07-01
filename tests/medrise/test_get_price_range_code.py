@@ -249,8 +249,8 @@ class TestCodeCurrencyLookup:
         result = json.loads(mod.get_price_range("bariatric", "sleeve_gastrectomy", "GBP"))
         assert result["sub_procedure_display"] == "Sleeve Gastrectomy"
 
-    def test_defaults_currency_to_eur_when_none(self, monkeypatch):
-        """When currency is omitted, defaults to EUR."""
+    def test_defaults_currency_to_gbp_when_none(self, monkeypatch):
+        """When currency is omitted, defaults to GBP."""
         mod, _ = _load_module()
 
         captured_currency = []
@@ -266,7 +266,7 @@ class TestCodeCurrencyLookup:
         monkeypatch.setattr(mod, "_get_price", fake_get_price)
 
         mod.get_price_range("bariatric", sub_procedure="sleeve_gastrectomy")
-        assert captured_currency == ["EUR"], f"Expected EUR default, got {captured_currency}"
+        assert captured_currency == ["GBP"], f"Expected GBP default, got {captured_currency}"
 
 
 # ---------------------------------------------------------------------------
@@ -376,7 +376,7 @@ class TestRegister:
         ])
         monkeypatch.setattr(
             mod, "_get_price",
-            lambda code, currency: {"treatmentName": "Sleeve Gastrectomy", "amount": 4000, "currency": "EUR"}
+            lambda code, currency: {"treatmentName": "Sleeve Gastrectomy", "amount": 4000, "currency": "GBP"}
         )
 
         captured = {}
@@ -392,8 +392,8 @@ class TestRegister:
 
         # Invoke handler with the new optional-arg call style
         result_str = captured["handler"](
-            {"procedure": "bariatric", "sub_procedure": "sleeve_gastrectomy", "currency": "EUR"}
+            {"procedure": "bariatric", "sub_procedure": "sleeve_gastrectomy", "currency": "GBP"}
         )
         result = json.loads(result_str)
         assert result["typical_price"] == 4000
-        assert result["currency"] == "EUR"
+        assert result["currency"] == "GBP"
