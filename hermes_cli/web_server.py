@@ -7844,8 +7844,6 @@ async def start_named_gateway(profile_name: str):
     args = _profile_cli_args(profile_name)
     try:
         proc = _spawn_hermes_action([*args, "gateway", "start"], "gateway-start")
-    except HTTPException:
-        raise
     except Exception as exc:
         _log.exception("Failed to spawn gateway start for profile %s", profile_name)
         raise HTTPException(status_code=500, detail=f"Failed to start gateway: {exc}")
@@ -7857,8 +7855,6 @@ async def stop_named_gateway(profile_name: str):
     args = _profile_cli_args(profile_name)
     try:
         proc = _spawn_hermes_action([*args, "gateway", "stop"], "gateway-stop")
-    except HTTPException:
-        raise
     except Exception as exc:
         _log.exception("Failed to spawn gateway stop for profile %s", profile_name)
         raise HTTPException(status_code=500, detail=f"Failed to stop gateway: {exc}")
