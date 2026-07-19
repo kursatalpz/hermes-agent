@@ -7821,6 +7821,50 @@ async def stop_gateway():
     return {"ok": True, "pid": proc.pid, "name": "gateway-stop"}
 
 
+# --- argus fleet yaması (2026-07-20) ---------------------------------------
+# İsimli profil için gateway yaşam döngüsü. Yukarıdaki parametresiz uçlar hep
+# dashboard'ın KENDİ profilini hedefliyor; argus uzaktan oluşturduğu bir ajanı
+# bu yüzden ayağa kaldıramıyordu. `hermes -p <ad> gateway start` aynı zamanda
+# desired_state="running" damgası yazar → sonraki konteyner açılışında
+# container_boot onu kendiliğinden kaldırır.
+#
+# _profile_cli_args() -p argümanını üretirken _resolve_profile_dir() üzerinden
+# profil adını doğrular (path traversal / geçersiz ad → 400, yok → 404) —
+# doğrulama try/except DIŞINDA çağrılır ki bu HTTPException'lar olduğu gibi
+# yukarı çıksın (aşağıdaki generic except'e düşüp 500'e dönüşmesin).
+#
+# NOT: _ACTION_LOG_FILES SABİT bir sözlük — dinamik ad (ör.
+# f"gateway-start-{profile_name}") burada KeyError üretir. Bu yüzden var olan
+# "gateway-start"/"gateway-stop" anahtarları kullanılıyor; log dosyası ve
+# _ACTION_PROCS kaydı dashboard'ın kendi start/stop'uyla PAYLAŞILIR (kabul
+# edilebilir — profil adı yanıt gövdesinde ve exception log'unda ayrıca var;
+# isimli aksiyonlar için ayrı durum takibi bu görevin kapsamı dışında).
+@app.post("/api/gateway/{profile_name}/start")
+async def start_named_gateway(profile_name: str):
+    args = _profile_cli_args(profile_name)
+    try:
+        proc = _spawn_hermes_action([*args, "gateway", "start"], "gateway-start")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to spawn gateway start for profile %s", profile_name)
+        raise HTTPException(status_code=500, detail=f"Failed to start gateway: {exc}")
+    return {"ok": True, "pid": proc.pid, "profile": profile_name}
+
+
+@app.post("/api/gateway/{profile_name}/stop")
+async def stop_named_gateway(profile_name: str):
+    args = _profile_cli_args(profile_name)
+    try:
+        proc = _spawn_hermes_action([*args, "gateway", "stop"], "gateway-stop")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _log.exception("Failed to spawn gateway stop for profile %s", profile_name)
+        raise HTTPException(status_code=500, detail=f"Failed to stop gateway: {exc}")
+    return {"ok": True, "pid": proc.pid, "profile": profile_name}
+
+
 # ---------------------------------------------------------------------------
 # Credential pool endpoints — list / add / remove rotation keys.
 #
