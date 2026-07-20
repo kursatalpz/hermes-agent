@@ -7176,6 +7176,10 @@ async def delete_cron_job(job_id: str, profile: Optional[str] = None):
 # Neden ALT SÜREÇ: (1) bozuk kod çalışan dashboard sürecini kirletmemeli,
 # (2) Python bir paketi aynı süreçte "temiz" yeniden yükleyemez (sys.modules kirlenir).
 
+# Kaynak kodu metni — ikili değil; makul bir tavan (kod-review bulgusu #4).
+_MAX_PLUGIN_VERIFY_FILE_COUNT = 200
+_MAX_PLUGIN_VERIFY_TOTAL_BYTES = 2 * 1024 * 1024
+
 _PLUGIN_VERIFY_SNIPPET = r'''
 import importlib.util, json, sys
 from pathlib import Path
@@ -7185,7 +7189,7 @@ spec = importlib.util.spec_from_file_location(
     "medrise_verify", pkg_dir / "__init__.py",
     submodule_search_locations=[str(pkg_dir)])
 if spec is None or spec.loader is None:
-    print(json.dumps({"ok": False, "toolCount": 0, "error": "spec olusturulamadi"}))
+    print(json.dumps({"ok": False, "toolCount": 0, "tools": [], "error": "spec olusturulamadi"}))
     sys.exit(0)
 module = importlib.util.module_from_spec(spec)
 module.__package__ = "medrise_verify"
@@ -7195,6 +7199,12 @@ try:
     spec.loader.exec_module(module)
     names = []
     class _Ctx:
+        # Kasıtlı DAR taklit — yalnız register_tool var. Gerçek PluginContext
+        # (hermes_cli/plugins.py:290-398) ayrıca ctx.llm / ctx.manifest /
+        # ctx.inject_message / ctx.register_cli_command da sunar; register()
+        # sırasında bunlardan birine dokunan bir plugin burada AttributeError
+        # alır ve YANLIŞ-NEGATİF (ok=false) üretir — kayıt-zamanı kodun
+        # kapsamı budur, çalışma-zamanı davranışı değil.
         def register_tool(self, name=None, **kw):
             names.append(name)
     module.register(_Ctx())
@@ -7215,47 +7225,77 @@ class PluginVerifyBody(BaseModel):
 
 @app.post("/api/plugins/verify")
 async def verify_plugin(body: PluginVerifyBody):
-    """Dosya kümesini geçici klasöre yazıp AYRI SÜREÇTE import eder, tool sayar."""
-    import subprocess
-    import tempfile
+    """Dosya kümesini geçici klasöre yazıp AYRI SÜREÇTE import eder, tool sayar.
 
+    Yeşil sonuç tool'ların CANLIYA çıkacağını GARANTİ ETMEZ: gerçek paylaşımlı
+    registry (tools/registry.py:257-289) isim çakışan bir tool'u override=True
+    olmadan sessizce log'layıp REDDEDER — bu izole doğrulama o çakışmayı
+    yapısal olarak göremez (kendi taze/boş sahte registry'sinde çalışır).
+    """
     if not body.files:
         raise HTTPException(status_code=400, detail="files bos olamaz")
+    if len(body.files) > _MAX_PLUGIN_VERIFY_FILE_COUNT:
+        raise HTTPException(
+            status_code=400,
+            detail=f"cok fazla dosya (max {_MAX_PLUGIN_VERIFY_FILE_COUNT})",
+        )
+    total_bytes = sum(len(content.encode("utf-8")) for content in body.files.values())
+    if total_bytes > _MAX_PLUGIN_VERIFY_TOTAL_BYTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"toplam icerik cok buyuk (max {_MAX_PLUGIN_VERIFY_TOTAL_BYTES} bayt)",
+        )
 
-    with tempfile.TemporaryDirectory(prefix="plugin-verify-") as tmp:
-        root = Path(tmp)
-        pkg_dir = None
-        for rel, content in body.files.items():
-            safe = rel.replace("\\", "/")
-            if safe.startswith("/") or ".." in safe.split("/"):
-                raise HTTPException(status_code=400, detail=f"gecersiz yol: {rel}")
-            target = root / safe
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(content, encoding="utf-8")
-            if target.name == "__init__.py":
-                pkg_dir = target.parent
+    try:
+        with tempfile.TemporaryDirectory(prefix="plugin-verify-") as tmp:
+            root = Path(tmp).resolve()
+            pkg_dir = None
+            for rel, content in body.files.items():
+                safe = rel.replace("\\", "/")
+                if safe.startswith("/") or ".." in safe.split("/"):
+                    raise HTTPException(status_code=400, detail=f"gecersiz yol: {rel}")
+                target = root / safe
+                # İki katmanlı kapı (bu dosyanın _resolve_managed_path deseni,
+                # GHSA-5qr3-c538-wm9j): segment kontrolü YETMEZ, resolve+
+                # containment de gerekir — spec_from_file_location'a giden yol
+                # burada sabitleniyor.
+                if not _path_is_under(root, target.resolve()):
+                    raise HTTPException(status_code=400, detail=f"gecersiz yol: {rel}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+                if target.name == "__init__.py":
+                    # Birden fazla __init__.py gönderilirse EN ÜSTTEKİ (en kısa
+                    # yol) kazanır — dict sırasına bağlı olmasın (kod-review #6).
+                    if pkg_dir is None or len(target.parent.parts) < len(pkg_dir.parts):
+                        pkg_dir = target.parent
 
-        if pkg_dir is None:
-            raise HTTPException(status_code=400, detail="__init__.py bulunamadi")
+            if pkg_dir is None:
+                raise HTTPException(status_code=400, detail="__init__.py bulunamadi")
 
-        snippet = root / "_verify_runner.py"
-        snippet.write_text(_PLUGIN_VERIFY_SNIPPET, encoding="utf-8")
-        try:
+            snippet = root / "_verify_runner.py"
+            snippet.write_text(_PLUGIN_VERIFY_SNIPPET, encoding="utf-8")
+
             proc = subprocess.run(
                 [sys.executable, str(snippet), str(pkg_dir)],
                 capture_output=True, text=True, timeout=30,
             )
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "toolCount": 0, "error": "dogrulama zaman asimi (30sn)"}
 
-        out = (proc.stdout or "").strip().splitlines()
-        if not out:
-            return {"ok": False, "toolCount": 0,
-                    "error": (proc.stderr or "cikti yok")[-2000:]}
-        try:
-            return json.loads(out[-1])
-        except json.JSONDecodeError:
-            return {"ok": False, "toolCount": 0, "error": out[-1][-2000:]}
+            out = (proc.stdout or "").strip().splitlines()
+            if not out:
+                return {"ok": False, "toolCount": 0, "tools": [],
+                        "error": (proc.stderr or "cikti yok")[-2000:]}
+            try:
+                return json.loads(out[-1])
+            except json.JSONDecodeError:
+                return {"ok": False, "toolCount": 0, "tools": [], "error": out[-1][-2000:]}
+    except HTTPException:
+        raise
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "toolCount": 0, "tools": [], "error": "dogrulama zaman asimi (30sn)"}
+    except Exception as exc:
+        # Kapı kendisi 500 olmamalı: bozuk dosya yazma (OSError), garip kodlama
+        # (UnicodeDecodeError) ne olursa olsun temiz {ok:false} dönsün.
+        return {"ok": False, "toolCount": 0, "tools": [], "error": f"{type(exc).__name__}: {exc}"}
 
 
 # ---------------------------------------------------------------------------
