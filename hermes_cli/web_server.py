@@ -6892,11 +6892,16 @@ async def get_logs(
 
 
 class CronJobCreate(BaseModel):
-    prompt: str
+    prompt: Optional[str] = None
     schedule: str
     name: str = ""
     deliver: str = "local"
     skills: Optional[List[str]] = None
+    # argus filo göçü: no_agent script cron'ları (dispatch/watcher) bu üç alan olmadan
+    # kurulamıyordu — 6 cron'un 5'i etkileniyordu.
+    script: Optional[str] = None
+    no_agent: bool = False
+    enabled_toolsets: Optional[List[str]] = None
 
 
 class CronJobUpdate(BaseModel):
@@ -7069,6 +7074,9 @@ async def create_cron_job(body: CronJobCreate, profile: str = "default"):
             name=body.name,
             deliver=body.deliver,
             skills=body.skills,
+            script=body.script,
+            no_agent=body.no_agent,
+            enabled_toolsets=body.enabled_toolsets,
         )
     except Exception as e:
         _log.exception("POST /api/cron/jobs failed")
