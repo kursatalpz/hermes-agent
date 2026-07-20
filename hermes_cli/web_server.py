@@ -7164,6 +7164,100 @@ async def delete_cron_job(job_id: str, profile: Optional[str] = None):
     return {"ok": True}
 
 
+# --- plugin doğrulama (argus filo göçü) ---------------------------------
+#
+# argus plugin kodunu DB'de tutuyor ve ekrandan düzenletiyor. Kaydetmeden ÖNCE
+# buraya soruyor: "bu dosya kümesi gerçekten yükleniyor ve kaç tool kaydediyor?"
+#
+# Neden salt syntax kontrolü (compile()) YETMEZ: geçmişte yaşanan gerçek arıza bir
+# IMPORT hatasıydı (dosya sözdizimsel olarak kusursuzdu, yanlış yerden import
+# ediyordu) ve tool'lar sessizce kayboldu. Onu yalnız gerçek import yakalar.
+#
+# Neden ALT SÜREÇ: (1) bozuk kod çalışan dashboard sürecini kirletmemeli,
+# (2) Python bir paketi aynı süreçte "temiz" yeniden yükleyemez (sys.modules kirlenir).
+
+_PLUGIN_VERIFY_SNIPPET = r'''
+import importlib.util, json, sys
+from pathlib import Path
+
+pkg_dir = Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location(
+    "medrise_verify", pkg_dir / "__init__.py",
+    submodule_search_locations=[str(pkg_dir)])
+if spec is None or spec.loader is None:
+    print(json.dumps({"ok": False, "toolCount": 0, "error": "spec olusturulamadi"}))
+    sys.exit(0)
+module = importlib.util.module_from_spec(spec)
+module.__package__ = "medrise_verify"
+module.__path__ = [str(pkg_dir)]
+sys.modules["medrise_verify"] = module
+try:
+    spec.loader.exec_module(module)
+    names = []
+    class _Ctx:
+        def register_tool(self, name=None, **kw):
+            names.append(name)
+    module.register(_Ctx())
+    print(json.dumps({"ok": True, "toolCount": len(names), "tools": sorted(names), "error": None}))
+except Exception as exc:
+    import traceback
+    print(json.dumps({
+        "ok": False, "toolCount": 0, "tools": [],
+        "error": f"{type(exc).__name__}: {exc}",
+        "traceback": traceback.format_exc()[-2000:],
+    }))
+'''
+
+
+class PluginVerifyBody(BaseModel):
+    files: Dict[str, str]
+
+
+@app.post("/api/plugins/verify")
+async def verify_plugin(body: PluginVerifyBody):
+    """Dosya kümesini geçici klasöre yazıp AYRI SÜREÇTE import eder, tool sayar."""
+    import subprocess
+    import tempfile
+
+    if not body.files:
+        raise HTTPException(status_code=400, detail="files bos olamaz")
+
+    with tempfile.TemporaryDirectory(prefix="plugin-verify-") as tmp:
+        root = Path(tmp)
+        pkg_dir = None
+        for rel, content in body.files.items():
+            safe = rel.replace("\\", "/")
+            if safe.startswith("/") or ".." in safe.split("/"):
+                raise HTTPException(status_code=400, detail=f"gecersiz yol: {rel}")
+            target = root / safe
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            if target.name == "__init__.py":
+                pkg_dir = target.parent
+
+        if pkg_dir is None:
+            raise HTTPException(status_code=400, detail="__init__.py bulunamadi")
+
+        snippet = root / "_verify_runner.py"
+        snippet.write_text(_PLUGIN_VERIFY_SNIPPET, encoding="utf-8")
+        try:
+            proc = subprocess.run(
+                [sys.executable, str(snippet), str(pkg_dir)],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return {"ok": False, "toolCount": 0, "error": "dogrulama zaman asimi (30sn)"}
+
+        out = (proc.stdout or "").strip().splitlines()
+        if not out:
+            return {"ok": False, "toolCount": 0,
+                    "error": (proc.stderr or "cikti yok")[-2000:]}
+        try:
+            return json.loads(out[-1])
+        except json.JSONDecodeError:
+            return {"ok": False, "toolCount": 0, "error": out[-1][-2000:]}
+
+
 # ---------------------------------------------------------------------------
 # Automation Blueprints — parameterized automation blueprints. The dashboard renders the
 # slot schema as a form; submitting instantiates a real cron job via the same
