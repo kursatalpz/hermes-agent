@@ -6902,6 +6902,9 @@ class CronJobCreate(BaseModel):
     script: Optional[str] = None
     no_agent: bool = False
     enabled_toolsets: Optional[List[str]] = None
+    # argus filo uzlaştırması "oluştur + hemen durdur" akışında enabled=false ile kurabilmeli —
+    # alan modelde yokken gövdedeki değer sessizce düşüyordu (Fable 5 kontrol bulgusu 2026-07-21).
+    enabled: bool = True
 
 
 class CronJobUpdate(BaseModel):
@@ -7077,6 +7080,7 @@ async def create_cron_job(body: CronJobCreate, profile: str = "default"):
             script=body.script,
             no_agent=body.no_agent,
             enabled_toolsets=body.enabled_toolsets,
+            enabled=body.enabled,
         )
     except Exception as e:
         _log.exception("POST /api/cron/jobs failed")

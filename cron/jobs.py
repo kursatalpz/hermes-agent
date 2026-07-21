@@ -626,6 +626,7 @@ def create_job(
     enabled_toolsets: Optional[List[str]] = None,
     workdir: Optional[str] = None,
     no_agent: bool = False,
+    enabled: bool = True,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -742,8 +743,8 @@ def create_job(
             "times": repeat,  # None = forever
             "completed": 0
         },
-        "enabled": True,
-        "state": "scheduled",
+        "enabled": enabled,
+        "state": "scheduled" if enabled else "paused",
         "paused_at": None,
         "paused_reason": None,
         "created_at": now,
