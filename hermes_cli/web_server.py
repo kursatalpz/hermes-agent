@@ -7316,22 +7316,22 @@ async def verify_script(body: ScriptVerifyRequest):
     """Script'i geçici dosyaya yazıp AYRI SÜREÇTE py_compile eder (import DEĞİL —
     script'ler bağımsız dosya, paket değil; import etmek yan etki çalıştırırdı).
     Sözdizim hatası {ok:false} döner (HTTP 200); kapı kendisi 500 olmaz."""
-    with tempfile.TemporaryDirectory(prefix="script-verify-") as tmp:
-        path = os.path.join(tmp, os.path.basename(body.filename) or "script.py")
-        try:
+    try:
+        with tempfile.TemporaryDirectory(prefix="script-verify-") as tmp:
+            path = os.path.join(tmp, os.path.basename(body.filename) or "script.py")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(body.content)
             proc = subprocess.run(
                 [sys.executable, "-m", "py_compile", path],
                 capture_output=True, text=True, timeout=30,
             )
-        except subprocess.TimeoutExpired:
-            return {"ok": False, "error": "dogrulama zaman asimi (30sn)"}
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    if proc.returncode != 0:
-        return {"ok": False, "error": (proc.stderr or proc.stdout or "derleme hatasi")[-2000:]}
-    return {"ok": True, "error": None}
+        if proc.returncode != 0:
+            return {"ok": False, "error": (proc.stderr or proc.stdout or "derleme hatasi")[-2000:]}
+        return {"ok": True, "error": None}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "dogrulama zaman asimi (30sn)"}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 # ---------------------------------------------------------------------------
