@@ -7351,15 +7351,27 @@ def run_tests(req: TestRunRequest):
     kırılgan regex yerine dürüst ham metin gösterir). Bilerek düz `def`:
     pytest 180sn sürebilir, `async def` olsaydı event loop'u o süre boyunca
     bloklardı — plain def FastAPI'de threadpool'da çalışır.
+
+    ⚠️ Dosyalar GEÇERLİ İSİMLİ bir PAKET alt dizinine (``plugintests/`` +
+    sentetik ``__init__.py``) yazılır — düz dizine DEĞİL. Testler
+    ``from .conftest import ...`` göreli import kullanıyor; bu yalnız dosyalar
+    bir paketin parçasıysa çözülür. Host'ta ``hermes/tests/__init__.py`` bu
+    bağlamı sağlıyordu; konteynerde aynı düzeni burada yeniden kuruyoruz
+    (canlı E2E bulgusu — düz yazımda "attempted relative import with no known
+    parent package"). Geçici dizin adı tire içerdiğinden (geçersiz paket adı)
+    paket adı sabit ``plugintests``, dizinin kendisi değil.
     """
     with tempfile.TemporaryDirectory(prefix="argus-tests-") as td:
+        pkg = os.path.join(td, "plugintests")
+        os.makedirs(pkg, exist_ok=True)
+        open(os.path.join(pkg, "__init__.py"), "w", encoding="utf-8").close()
         for rel, content in req.files.items():
             base = os.path.basename(rel)  # traversal koruması: alt dizin yok, düz set
-            with open(os.path.join(td, base), "w", encoding="utf-8") as f:
+            with open(os.path.join(pkg, base), "w", encoding="utf-8") as f:
                 f.write(content)
         env = dict(os.environ)  # HERMES_HOME=/opt/data konteynerde zaten set
         proc = subprocess.run(
-            [sys.executable, "-m", "pytest", td, "-q", "--tb=short", "-p", "no:cacheprovider"],
+            [sys.executable, "-m", "pytest", pkg, "-q", "--tb=short", "-p", "no:cacheprovider"],
             capture_output=True, text=True, timeout=180, env=env, cwd=td,
         )
     out = (proc.stdout or "") + (proc.stderr or "")
