@@ -216,6 +216,11 @@ RUN chmod -R a+rX /opt/hermes && \
 # this a fast (~1s) egg-link creation with no resolution or downloads.
 RUN uv pip install --no-cache-dir --no-deps -e "."
 
+# ---------- Test runner dependency ----------
+# argus test-runner ucu (POST /api/tests/run) konteyner içinde `python -m pytest`
+# çalıştırır — pytest imaja gömülü olmalı (runtime'da kurulum yok, offline/hızlı).
+RUN uv pip install --no-cache-dir pytest
+
 # ---------- Bake build-time git revision ----------
 # .dockerignore excludes .git, so `git rev-parse HEAD` from inside the
 # container always returns nothing — meaning `hermes dump` reports

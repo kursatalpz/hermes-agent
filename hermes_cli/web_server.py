@@ -7338,6 +7338,34 @@ async def verify_script(body: ScriptVerifyRequest):
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+class TestRunRequest(BaseModel):
+    files: Dict[str, str]  # rel_path -> içerik; conftest.py dahil TÜM set gelir (import zinciri bütün koşmalı).
+
+
+@app.post("/api/tests/run")
+def run_tests(req: TestRunRequest):
+    """Test dosya kümesini geçici dizine yazıp AYRI SÜREÇTE pytest çalıştırır.
+
+    HERMES_HOME ortam değişkeni konteynerde zaten set — testler canlı profile
+    karşı koşar. Ham çıktı döner (argus tarafı özet satırını ayrıştırmaz;
+    kırılgan regex yerine dürüst ham metin gösterir). Bilerek düz `def`:
+    pytest 180sn sürebilir, `async def` olsaydı event loop'u o süre boyunca
+    bloklardı — plain def FastAPI'de threadpool'da çalışır.
+    """
+    with tempfile.TemporaryDirectory(prefix="argus-tests-") as td:
+        for rel, content in req.files.items():
+            base = os.path.basename(rel)  # traversal koruması: alt dizin yok, düz set
+            with open(os.path.join(td, base), "w", encoding="utf-8") as f:
+                f.write(content)
+        env = dict(os.environ)  # HERMES_HOME=/opt/data konteynerde zaten set
+        proc = subprocess.run(
+            [sys.executable, "-m", "pytest", td, "-q", "--tb=short", "-p", "no:cacheprovider"],
+            capture_output=True, text=True, timeout=180, env=env, cwd=td,
+        )
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return {"ok": proc.returncode == 0, "exitCode": proc.returncode, "output": out[-8000:]}
+
+
 # ---------------------------------------------------------------------------
 # Automation Blueprints — parameterized automation blueprints. The dashboard renders the
 # slot schema as a form; submitting instantiates a real cron job via the same
